@@ -1,0 +1,5 @@
+text: |
+    change the image from monochrome to full color.
+
+image_paths:
+    - 'path/to/your/monochrome_image.jpg'
