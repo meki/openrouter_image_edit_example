@@ -35,7 +35,19 @@ def base64_url_to_base64_image(base64_url):
 
 def save_base64_url_to_file(base64_url, output_path):
     base64_image = base64_url_to_base64_image(base64_url)
-    Path(output_path).write_bytes(base64.b64decode(base64_image))
+    image_data = base64.b64decode(base64_image)
+    
+    # 画像フォーマットを自動判別
+    image = Image.open(BytesIO(image_data))
+    
+    # 出力パスの拡張子を画像フォーマットに合わせる
+    output_path = Path(output_path)
+    format_extension = image.format.lower() if image.format else 'png'
+    output_path = output_path.with_suffix(f'.{format_extension}')
+    
+    # 画像を保存
+    image.save(output_path)
+    return output_path
 
 
 def image_generation_request(messages, model, openrouter_api_key=None):
@@ -77,9 +89,9 @@ def save_response_images(output_base_folder, response, prompt_info_data):
 
     for idx, image_info in enumerate(images):
         base64_response = image_info["image_url"]["url"]
-        output_image_path = output_folder_path / f"{yyyymmddhhmmss}_{id}_{idx}.jpg"
-        save_base64_url_to_file(base64_response, output_image_path)
-        print(f"Saved image to {output_image_path}")
+        output_image_path = output_folder_path / f"{yyyymmddhhmmss}_{id}_{idx}"
+        saved_path = save_base64_url_to_file(base64_response, output_image_path)
+        print(f"Saved image to {saved_path}")
 
     # prompt_info.yamlを保存
     prompt_info_output_path = output_folder_path / f"{yyyymmddhhmmss}_{id}_prompt_info.yaml"

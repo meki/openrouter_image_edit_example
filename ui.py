@@ -1,4 +1,5 @@
 import os
+import tempfile
 from pathlib import Path
 from dotenv import load_dotenv
 from PIL import Image
@@ -69,6 +70,32 @@ def load_image_preview(path):
         return None
     except Exception:
         return None
+
+
+def handle_image_upload(image):
+    """アップロードされた画像を一時ファイルとして保存し、パスを返す"""
+    if image is None:
+        return "", None
+    
+    try:
+        # 画像がファイルパスの場合
+        if isinstance(image, str):
+            return image, Image.open(image)
+        
+        # PIL Imageの場合、一時ファイルに保存
+        # 環境変数から一時ディレクトリのベースを取得
+        temp_base = os.getenv("TEMP_IMAGE_DIR", tempfile.gettempdir())
+        temp_dir = Path(temp_base) / "gradio_images"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        import time
+        timestamp = int(time.time() * 1000)
+        temp_path = temp_dir / f"uploaded_{timestamp}.png"
+        
+        image.save(temp_path)
+        return str(temp_path), image
+    except Exception:
+        return "", None
 
 
 def run_request(output_folder, api_key, model, prompt, *image_paths):
@@ -203,15 +230,25 @@ def create_ui():
         image_path_inputs = []
         image_path_warnings = []
         image_previews = []
+        image_uploads = []
 
         for i in range(5):
             with gr.Row():
                 with gr.Column(scale=3):
                     image_path = gr.Textbox(
                         label=f"Image Path {i+1}",
-                        placeholder="画像パスを入力"
+                        placeholder="画像パスを入力または下のエリアに画像を貼り付け"
                     )
                     image_path_inputs.append(image_path)
+                    
+                    # 画像アップロード用
+                    image_upload = gr.Image(
+                        label=f"画像をアップロード/貼り付け {i+1}",
+                        type="pil",
+                        height=200,
+                        sources=["upload", "clipboard"]
+                    )
+                    image_uploads.append(image_upload)
 
                     warning = gr.Markdown(
                         value="", elem_classes=["warning-text"])
@@ -236,6 +273,13 @@ def create_ui():
                 fn=load_image_preview,
                 inputs=[image_path],
                 outputs=[preview]
+            )
+            
+            # 画像アップロード時の処理
+            image_upload.change(
+                fn=handle_image_upload,
+                inputs=[image_upload],
+                outputs=[image_path, preview]
             )
 
         with gr.Row():
