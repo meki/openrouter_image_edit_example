@@ -1,11 +1,75 @@
 import os
 import tempfile
+import json
 from pathlib import Path
 from dotenv import load_dotenv
 from PIL import Image
 import gradio as gr
 import yaml
 from core import gemini_pro_3_image_preview_request, flux_2_pro_image_preview_request, save_response_images, get_image_from_base64, base64_url_to_base64_image
+
+
+def get_settings_path():
+    """設定ファイルのパスを取得"""
+    settings_folder = os.getenv("SETTING_FOLDER_PATH", ".")
+    settings_folder = Path(settings_folder)
+    settings_folder.mkdir(parents=True, exist_ok=True)
+    return settings_folder / "settings.json"
+
+
+def load_settings():
+    """設定ファイルを読み込む"""
+    settings_path = get_settings_path()
+    if settings_path.exists():
+        try:
+            with settings_path.open("r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {"image_path_history": []}
+    return {"image_path_history": []}
+
+
+def save_settings(settings):
+    """設定ファイルを保存"""
+    settings_path = get_settings_path()
+    try:
+        with settings_path.open("w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Failed to save settings: {e}")
+
+
+def add_to_history(path):
+    """画像パスを履歴に追加"""
+    if not path or path.strip() == "":
+        return
+    
+    path = path.strip('"')
+    if not Path(path).exists():
+        return
+    
+    settings = load_settings()
+    history = settings.get("image_path_history", [])
+    
+    # 既存の場合は削除
+    if path in history:
+        history.remove(path)
+    
+    # 先頭に追加
+    history.insert(0, path)
+    # 最大300件に制限
+    history = history[:300]
+    
+    settings["image_path_history"] = history
+    save_settings(settings)
+
+
+def get_history_choices():
+    """履歴からドロップダウンの選択肢を取得"""
+    settings = load_settings()
+    history = settings.get("image_path_history", [])
+    # 存在するパスのみを返す
+    return [p for p in history if Path(p).exists()]
 
 
 def check_image_path(path):
@@ -106,18 +170,26 @@ def run_request(output_folder, api_key, model, prompt, *image_paths):
     valid_image_paths = [p.strip('"') for p in valid_image_paths]
 
     if not valid_image_paths:
-        return "エラー: 少なくとも1つの画像パスを指定してください", None
+        history = get_history_choices()
+        return "エラー: 少なくとも1つの画像パスを指定してください", None, *([gr.Dropdown(choices=history)] * 5)
 
     # パスの存在確認
     for path in valid_image_paths:
         if not Path(path).exists():
-            return f"エラー: 画像パスが存在しません: {path}", None
+            history = get_history_choices()
+            return f"エラー: 画像パスが存在しません: {path}", None, *([gr.Dropdown(choices=history)] * 5)
 
     if not prompt or prompt.strip() == "":
-        return "エラー: プロンプトを入力してください", None
+        history = get_history_choices()
+        return "エラー: プロンプトを入力してください", None, *([gr.Dropdown(choices=history)] * 5)
 
     if not api_key or api_key.strip() == "":
-        return "エラー: OpenRouter API Keyを入力してください", None
+        history = get_history_choices()
+        return "エラー: OpenRouter API Keyを入力してください", None, *([gr.Dropdown(choices=history)] * 5)
+    
+    # 画像パスを履歴に追加
+    for path in valid_image_paths:
+        add_to_history(path)
 
     try:
         # モデルに応じてリクエスト実行
@@ -129,7 +201,8 @@ def run_request(output_folder, api_key, model, prompt, *image_paths):
                 prompt, valid_image_paths, api_key)
 
         if response.status_code != 200:
-            return f"エラー: {response.status_code}\n{response.text}", None
+            history = get_history_choices()
+            return f"エラー: {response.status_code}\n{response.text}", None, *([gr.Dropdown(choices=history)] * 5)
 
         prompt_info_data = {
             "text": prompt,
@@ -167,11 +240,14 @@ def run_request(output_folder, api_key, model, prompt, *image_paths):
                 base64_data = base64_url_to_base64_image(base64_url)
                 pil_image = get_image_from_base64(base64_data)
                 pil_images.append(pil_image)
-
-        return result, pil_images if pil_images else None
+        
+        # 更新された履歴を取得
+        updated_history = get_history_choices()
+        return result, pil_images if pil_images else None, *([gr.Dropdown(choices=updated_history)] * 5)
 
     except Exception as e:
-        return f"エラーが発生しました: {str(e)}", None
+        history = get_history_choices()
+        return f"エラーが発生しました: {str(e)}", None, *([gr.Dropdown(choices=history)] * 5)
 
 
 def create_ui():
@@ -231,13 +307,19 @@ def create_ui():
         image_path_warnings = []
         image_previews = []
         image_uploads = []
+        
+        # 履歴を取得
+        history_choices = get_history_choices()
 
         for i in range(5):
             with gr.Row():
                 with gr.Column(scale=3):
-                    image_path = gr.Textbox(
+                    image_path = gr.Dropdown(
                         label=f"Image Path {i+1}",
-                        placeholder="画像パスを入力または下のエリアに画像を貼り付け"
+                        choices=history_choices,
+                        allow_custom_value=True,
+                        value="",
+                        interactive=True
                     )
                     image_path_inputs.append(image_path)
                     
@@ -305,7 +387,7 @@ def create_ui():
         run_btn.click(
             fn=run_request,
             inputs=[output_folder, api_key, model_dropdown, prompt, *image_path_inputs],
-            outputs=[result_output, image_gallery]
+            outputs=[result_output, image_gallery, *image_path_inputs]
         )
 
         # prompt_info.yamlアップロード時のイベント
