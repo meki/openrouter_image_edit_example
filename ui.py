@@ -105,7 +105,11 @@ def load_prompt_info(file):
     """
 prompt_info.yamlを読み込んでフォームに流し込む"""
     if file is None:
-        return "", "", "", "", "", "", None, None, None, None, None
+        # ファイルがない場合は全て空で返す
+        empty_paths = [""] * 10
+        empty_previews = [None] * 10
+        empty_rows = [gr.Row(visible=(i < 1)) for i in range(10)]
+        return "", *empty_paths, *empty_previews, *empty_rows, 1
 
     try:
         file_path = Path(file.name) if hasattr(file, 'name') else Path(file)
@@ -115,30 +119,36 @@ prompt_info.yamlを読み込んでフォームに流し込む"""
 
         prompt_text = prompt_info.get("text", "")
         image_paths = prompt_info.get("image_paths", [])
-
-        # 最大5個の画像パスを取得
-        path1 = image_paths[0] if len(image_paths) > 0 else ""
-        path2 = image_paths[1] if len(image_paths) > 1 else ""
-        path3 = image_paths[2] if len(image_paths) > 2 else ""
-        path4 = image_paths[3] if len(image_paths) > 3 else ""
-        path5 = image_paths[4] if len(image_paths) > 4 else ""
-
-        # 画像プレビューを読み込み
-        preview1 = Image.open(path1) if path1 and Path(
-            path1).exists() else None
-        preview2 = Image.open(path2) if path2 and Path(
-            path2).exists() else None
-        preview3 = Image.open(path3) if path3 and Path(
-            path3).exists() else None
-        preview4 = Image.open(path4) if path4 and Path(
-            path4).exists() else None
-        preview5 = Image.open(path5) if path5 and Path(
-            path5).exists() else None
-
-        return prompt_text, path1, path2, path3, path4, path5, preview1, preview2, preview3, preview4, preview5
+        
+        # 画像数を取得し、最大10個まで制限
+        num_images = min(len(image_paths), 10)
+        
+        # 10個のパスとプレビューを準備
+        paths = []
+        previews = []
+        
+        for i in range(10):
+            if i < len(image_paths):
+                path = image_paths[i]
+                paths.append(path)
+                # 画像プレビューを読み込み
+                preview = Image.open(path) if path and Path(path).exists() else None
+                previews.append(preview)
+            else:
+                paths.append("")
+                previews.append(None)
+        
+        # Rowの表示設定（画像数分表示する）
+        row_updates = [gr.Row(visible=(i < num_images)) for i in range(10)]
+        
+        return prompt_text, *paths, *previews, *row_updates, num_images
 
     except Exception:
-        return "", "", "", "", "", "", None, None, None, None, None
+        # エラー時は全て空で返す
+        empty_paths = [""] * 10
+        empty_previews = [None] * 10
+        empty_rows = [gr.Row(visible=(i < 1)) for i in range(10)]
+        return "", *empty_paths, *empty_previews, *empty_rows, 1
 
 
 def load_image_preview(path):
@@ -437,8 +447,7 @@ def create_ui():
         prompt_info_file.change(
             fn=load_prompt_info,
             inputs=[prompt_info_file],
-            outputs=[prompt, image_path_inputs[0], image_path_inputs[1], image_path_inputs[2], image_path_inputs[3], image_path_inputs[4],
-                     image_previews[0], image_previews[1], image_previews[2], image_previews[3], image_previews[4]]
+            outputs=[prompt, *image_path_inputs, *image_previews, *image_rows, visible_count]
         )
 
         # カスタムCSS
