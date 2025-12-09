@@ -25,8 +25,8 @@ def load_settings():
             with settings_path.open("r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
-            return {"image_path_history": []}
-    return {"image_path_history": []}
+            return {"image_path_history": [], "favorite_image_paths": []}
+    return {"image_path_history": [], "favorite_image_paths": []}
 
 
 def save_settings(settings):
@@ -74,29 +74,97 @@ def get_history_choices():
     return [p for p in history if Path(p).exists()]
 
 
-def get_history_gallery():
-    """履歴画像をギャラリー用のタプルリストで取得"""
+def add_to_favorites(path):
+    """画像パスをお気に入りに追加"""
+    if not path or path.strip() == "":
+        return
+    
+    path = path.strip('"')
+    if not Path(path).exists():
+        return
+    
+    settings = load_settings()
+    favorites = settings.get("favorite_image_paths", [])
+    
+    # 既にお気に入りに入っている場合は何もしない
+    if path not in favorites:
+        favorites.append(path)
+        settings["favorite_image_paths"] = favorites
+        save_settings(settings)
+
+
+def remove_from_favorites(path):
+    """画像パスをお気に入りから削除"""
+    if not path or path.strip() == "":
+        return
+    
+    path = path.strip('"')
+    settings = load_settings()
+    favorites = settings.get("favorite_image_paths", [])
+    
+    if path in favorites:
+        favorites.remove(path)
+        settings["favorite_image_paths"] = favorites
+        save_settings(settings)
+
+
+def is_favorite(path):
+    """画像パスがお気に入りに入っているか確認"""
+    if not path or path.strip() == "":
+        return False
+    
+    path = path.strip('"')
+    settings = load_settings()
+    favorites = settings.get("favorite_image_paths", [])
+    return path in favorites
+
+
+def get_favorites_choices():
+    """お気に入りからドロップダウンの選択肢を取得"""
+    settings = load_settings()
+    favorites = settings.get("favorite_image_paths", [])
+    # 存在するパスのみを返す
+    return [p for p in favorites if Path(p).exists()]
+
+
+def get_history_gallery(filter_mode="all"):
+    """履歴画像をギャラリー用のタプルリストで取得
+    
+    Args:
+        filter_mode: "all" (全て), "favorites" (お気に入りのみ)
+    """
     settings = load_settings()
     max_gallery_display = settings.get("max_gallery_display", 50)  # デフォルト50件
     
-    history_paths = get_history_choices()
+    if filter_mode == "favorites":
+        history_paths = get_favorites_choices()
+    else:
+        history_paths = get_history_choices()
+    
     gallery_items = []
+    favorites_set = set(settings.get("favorite_image_paths", []))
+    
     for path in history_paths[:max_gallery_display]:
         try:
             if Path(path).exists():
                 # (PIL Image, caption)のタプルで返す
                 img = Image.open(path)
-                # パスの最後の部分をキャプションに
-                caption = Path(path).name
+                # お気に入りの場合は★マークを付ける
+                star = "★ " if path in favorites_set else ""
+                caption = star + Path(path).name
                 gallery_items.append((img, caption))
         except Exception:
             continue
     return gallery_items
 
 
-def select_from_gallery(evt: gr.SelectData):
+def select_from_gallery(evt: gr.SelectData, filter_mode="all"):
     """ギャラリーから画像を選択したときの処理"""
-    history_paths = get_history_choices()
+    if filter_mode == "favorites":
+        history_paths = get_favorites_choices()
+    else:
+        history_paths = get_history_choices()
+    
     if evt.index < len(history_paths):
         selected_path = history_paths[evt.index]
         try:
@@ -105,6 +173,29 @@ def select_from_gallery(evt: gr.SelectData):
         except Exception:
             return selected_path, None
     return "", None
+
+
+def update_gallery_display(filter_mode):
+    """ギャラリーの表示を更新"""
+    return get_history_gallery(filter_mode)
+
+
+def toggle_favorite(current_path, filter_mode):
+    """お気に入りの追加/削除を切り替え"""
+    if not current_path or current_path.strip() == "":
+        return get_history_gallery(filter_mode), "画像パスを選択してください"
+    
+    current_path = current_path.strip('"')
+    
+    if is_favorite(current_path):
+        remove_from_favorites(current_path)
+        message = f"お気に入りから削除しました: {Path(current_path).name}"
+    else:
+        add_to_favorites(current_path)
+        message = f"お気に入りに追加しました: {Path(current_path).name}"
+    
+    # ギャラリーを更新して返す
+    return get_history_gallery(filter_mode), message
 
 
 def show_image_row(current_count):
@@ -381,6 +472,9 @@ def create_ui():
         
         # 履歴ギャラリーのリストを保持
         history_galleries = []
+        filter_radios = []
+        favorite_buttons = []
+        favorite_messages = []
 
         for i in range(10):
             with gr.Row(visible=(i < 1)) as row:
@@ -397,9 +491,28 @@ def create_ui():
                     
                     # 履歴から画像を選択するギャラリー
                     with gr.Accordion(f"履歴から画像を選択 {i+1}", open=False):
+                        with gr.Row():
+                            filter_radio = gr.Radio(
+                                choices=["全て", "お気に入りのみ"],
+                                value="全て",
+                                label="表示フィルター",
+                                scale=2
+                            )
+                            filter_radios.append(filter_radio)
+                            
+                            favorite_btn = gr.Button(
+                                "★ お気に入り切替",
+                                size="sm",
+                                scale=1
+                            )
+                            favorite_buttons.append(favorite_btn)
+                        
+                        favorite_msg = gr.Markdown(value="", elem_classes=["favorite-message"])
+                        favorite_messages.append(favorite_msg)
+                        
                         history_gallery = gr.Gallery(
                             label="画像履歴",
-                            value=get_history_gallery(),
+                            value=get_history_gallery("all"),
                             columns=5,
                             rows=2,
                             height=300,
@@ -449,9 +562,24 @@ def create_ui():
                 outputs=[image_path, preview]
             )
             
+            # フィルター切り替え時にギャラリーを更新
+            filter_radio.change(
+                fn=lambda mode: update_gallery_display("favorites" if mode == "お気に入りのみ" else "all"),
+                inputs=[filter_radio],
+                outputs=[history_gallery]
+            )
+            
+            # お気に入りボタンのクリック処理
+            favorite_btn.click(
+                fn=lambda path, mode: toggle_favorite(path, "favorites" if mode == "お気に入りのみ" else "all"),
+                inputs=[image_path, filter_radio],
+                outputs=[history_gallery, favorite_msg]
+            )
+            
             # 履歴ギャラリーから画像を選択した時の処理
             history_gallery.select(
-                fn=select_from_gallery,
+                fn=lambda evt, mode: select_from_gallery(evt, "favorites" if mode == "お気に入りのみ" else "all"),
+                inputs=[filter_radio],
                 outputs=[image_path, preview]
             )
         
@@ -513,6 +641,12 @@ def create_ui():
             color: red;
             font-weight: bold;
             margin: 0;
+            padding: 0;
+        }
+        .favorite-message p {
+            color: #2563eb;
+            font-weight: bold;
+            margin: 5px 0;
             padding: 0;
         }
         """
